@@ -1,4 +1,4 @@
-# kronecker-chenc-for-arduino
+# RMT-Manchester-Library
 
 - [About](#about)
 - [Installation](#installation)
@@ -9,13 +9,11 @@
 
 ## About
 
-kronecker-chenc-for-arduino is an Arduino library that implements the channel encoding algorithm described in [the paper by F. Asim et al.](https://ieeexplore.ieee.org/document/9146283) for the case of BPSK. The implementation assumes the channel is a binary symmetric channel, that only digital data is sent and received, and that the packets' smallest unit is bytes (8 bits).
-
-Currently, only TPMD-4 with Scheme 2 is implemented, and the decoder implemented is the rank-one detector which has a coding rate of 1/4 due to the need of training symbols.
+RMT-Manchester-Library is an ESP-IDF library that implements Manchester line encoding utilizing the Remote Control Transceiver (RMT) peripheral of the ESP32 serie of microcontrollers. The library exposes the transmitter and receiver. The library implements two baud rates: 20 kBd and 50 kBd. Both baud rates have been tested to be working error-free even in non-ideal conditions.
 
 ## Installation
 
-Drag and drop the files `kronecker-chenc.cc` and `kronecker-chenc.h` to the directory where your libraries are installed.
+Drag and drop the directory `manch_rmt_rx` or `manch_rmt_tx` to the directory where your libraries are installed. The directory to drag and drop depends if the MCU will be used as a transmitter or a receiver. To change the GPIO used for transmitting or receiving, modify the corresponding macro on the header file.
 
 ## Usage
 
@@ -23,30 +21,86 @@ A basic usage example is shown in the next subsection.
 
 ### Transmitter
 
-```c++
-#include <Arduino.h>
-#include "kronecker-chenc.h"
+```c
+#include "manch_rmt_tx.h"
 
-#define TRAINING_SYMBOLS 0b10101010
+static const char *TAG = "main";
 
-void setup() {
-    // Begin serial monitor
-    Serial.begin(115200);
-    
-    /* Do other stuff */
+void app_main(void) {
+    ESP_LOGI(TAG, "started");
+
+    // Initialize RMT
+    manch_rmt_tx_init();
+
+    // Initialize something else ...
+
+    ESP_LOGI(TAG, "super loop mode");
+
+    const char message_one[] = "Manch";
+    const char messsage_two[] = "RMT";
+    const char message_three[] = "Module Test";
+
+    while (1) {
+        
+        manch_rmt_tx_transmit((const uint8_t*)message_one, sizeof(message_one) / sizeof(char) );
+        vTaskDelay(pdMS_TO_TICKS(20));
+        
+        manch_rmt_tx_transmit((const uint8_t*)messsage_two, sizeof(messsage_two) / sizeof(char));
+        vTaskDelay(pdMS_TO_TICKS(20));
+        
+        manch_rmt_tx_transmit((const uint8_t*)message_three, sizeof(message_three) / sizeof(char));
+        vTaskDelay(pdMS_TO_TICKS(20));
+        
+        // Do something else ...
+
+    }
 }
+```
 
-void loop() {
-    uint8_t msg_buffer[1];
-    // Check for messages
-    if (Serial.readBytesUntil(0x00, msg_buffer, 1) > 0) {
-        uint8_t encoded[2] = encode_kronecker_tpmd4s2(msg_buffer[0]);
+### Receiver
 
-        uint8_t decoded = rank_one_detector_tpmd4s2(encoded[0], encoded[1], TRAINING_SYMBOLS);
-        Serial.println(decoded, BIN);
+```c
+#include "manch_rmt_rx.h"
+
+static const char *TAG = "main";
+
+void work_with_val(uint8_t *packet) {
+    // Do something with the received data..
+
+    if (packet == NULL) {
+        return;
     }
 
-    /* Do other stuff */
+    for (size_t idx = 0; idx < 10; idx++) {
+        printf("%02x ", packet[idx]);
+    }
+
+}
+
+void app_main(void) {
+    ESP_LOGI(TAG, "started");
+
+    // Initialize RMT
+    ESP_ERROR_CHECK(manch_rmt_rx_init());
+
+    // Initialize something else ...
+
+    ESP_LOGI(TAG, "super loop mode");
+
+    while (1) {
+        if (manch_rmt_rx_check_for_data()) {    // This function blocks
+            uint8_t *ret_val;
+
+            while (manch_rmt_rx_retr_val(&ret_val)) {
+                work_with_val(ret_val);
+            }
+
+            // Do something else ...
+            
+        }
+
+        // Do something else ...
+    }
 }
 ```
 
@@ -56,28 +110,10 @@ For support or submitting bugs open an issue, I'll check them as soon as I am av
 
 ## License
 
-kronecker-chenc-for-arduino is licensed under the [MIT](./LICENSE) license.
+RMT-Manchester-Library is licensed under the [MIT](./LICENSE) license.
 
 ## More Information
 
-For more information about the algorithm and its performance read the original paper by Fazal E-Asim et al. at https://ieeexplore.ieee.org/document/9146283.
+A custom protocol is implemented on top of the communication that has the header showed in the next figure. The custom protocol, along with certain limitations with the RMT driver, only allow packets of up to 80 bits (10 bytes) to be transmitted at once.
 
-### Implementation details 
-
-- Since the modulation with Manchester/BPSK is a bijective function, the encoding is applied in the soon-to-be-sent bytes, not on the manchester modulated ones (contrary to what is done on the original paper).
-- When using BPSK each symbol is directly linked to 1 bit of information, this makes it possible to use bytes to represent vectors of 8 symbols. The code uses this idea and does every calculation using only bytes (`uint8_t`/`char`/`int8_t`); however, BPSK symbols have values in {-1, 1} and bits in {0, 1}, so the transformation $F(•)$ is applied where
-
-    - $F(-1) = 0$
-    - $F(1)  = 1$
-    - $F(a * b) = F(a) \odot F(b) \quad a,b \in \\{-1, 1\\}$.
-
-    The product is replaced by the negation of the XOR product of the transformed symbols, which has the following truth table and allows to maintain the property that $-1 * -1 = 1$.
-
-    | A | B | XNOR |
-    | :-: | :-: | :--------: |
-    | 0   | 0   | 1          |
-    | 0   | 1   | 0          |
-    | 1   | 0   | 0          |
-    | 1   | 1   | 1          |
-
-    **Table 1:** truth table of the XNOR operation
+![Manchester header with a clock signal for timing visualization](manch_rmt_rx/wavedrom.png "Manchester Header")
